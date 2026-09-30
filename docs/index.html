@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KestrelCOP | Tactical Edge Telemetry Pipeline & Common Operating Picture</title>
+  <meta name="description" content="Lightweight, offline-first Tactical Common Operating Picture (COP) fusing multi-source telemetry in contested, DIL environments using open standards.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0a0e17;
+      --bg-secondary: #111827;
+      --bg-tertiary: #1f2937;
+      --bg-card: rgba(17, 24, 39, 0.75);
+      --border-subtle: #2d3748;
+      --border-focus: #06b6d4;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      background-image:
+        radial-gradient(circle at 15% 20%, rgba(6, 182, 212, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 60%, rgba(16, 185, 129, 0.06) 0%, transparent 40%);
+    }
+
+    /* Grid backdrop */
+    .tactical-grid {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-size: 40px 40px;
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(12px);
+      background: rgba(10, 14, 23, 0.85);
+      border-bottom: 1px solid var(--border-subtle);
+      z-index: 50;
+      padding: 1rem 2rem;
+    }
+
+    .nav-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 800;
+      font-size: 1.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-emerald);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+    }
+
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      background-color: var(--accent-emerald);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-emerald);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-left: 1.5rem;
+      transition: color 0.2s;
+    }
+
+    nav a:hover {
+      color: var(--accent-cyan);
+    }
+
+    .btn-github {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 0.9rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.825rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .btn-github:hover {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 3rem 2rem 5rem;
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      padding: 3rem 0 4rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .hero-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .hero h1 {
+      font-size: 3.25rem;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.5rem;
+      background: linear-gradient(135deg, #ffffff 40%, #9ca3af 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      font-size: 1.2rem;
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+    }
+
+    .cta-group {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7 0%, #06b6d4 100%);
+      color: #fff;
+      padding: 0.75rem 1.75rem;
+      border-radius: 6px;
+      font-weight: 600;
+      text-decoration: none;
+      box-shadow: 0 4px 14px rgba(6, 182, 212, 0.3);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(6, 182, 212, 0.45);
+    }
+
+    .btn-secondary {
+      background: rgba(31, 41, 55, 0.8);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      padding: 0.75rem 1.75rem;
+      border-radius: 6px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(55, 65, 81, 0.8);
+    }
+
+    /* Live Telemetry Simulator */
+    .simulator-panel {
+      margin: 3rem 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .sim-header {
+      background: rgba(31, 41, 55, 0.7);
+      padding: 0.75rem 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .sim-title {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--accent-cyan);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .sim-controls {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .sim-btn {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .sim-btn:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    .sim-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 380px;
+    }
+
+    @media (max-width: 868px) {
+      .sim-body {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .sim-feed {
+      padding: 1.25rem;
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .sim-json-view {
+      padding: 1.25rem;
+      background: #080c14;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      overflow-y: auto;
+      max-height: 420px;
+      color: #38bdf8;
+    }
+
+    .feed-card {
+      background: rgba(17, 24, 39, 0.6);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.2s;
+    }
+
+    .feed-card.active {
+      border-color: var(--accent-emerald);
+      background: rgba(16, 185, 129, 0.05);
+    }
+
+    .feed-info h4 {
+      font-size: 0.9rem;
+      margin-bottom: 0.2rem;
+    }
+
+    .feed-info p {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .feed-badge {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      background: var(--bg-tertiary);
+    }
+
+    /* Architecture Tiers */
+    .section-title {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .section-sub {
+      color: var(--text-muted);
+      margin-bottom: 2.5rem;
+      font-size: 1.05rem;
+    }
+
+    .tier-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 4rem;
+    }
+
+    .tier-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 1.75rem;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+
+    .tier-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--accent-cyan);
+    }
+
+    .tier-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.75rem;
+    }
+
+    .tier-card h3 {
+      font-size: 1.25rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .tier-card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+    }
+
+    .tier-tech-list {
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+
+    .tier-tech-list li {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      background: var(--bg-tertiary);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      color: #e2e8f0;
+    }
+
+    /* Validation Table */
+    .table-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow-x: auto;
+      margin-bottom: 4rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+
+    th {
+      background: rgba(31, 41, 55, 0.7);
+      padding: 1rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    td {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .col-milestone {
+      font-family: var(--font-mono);
+      color: var(--accent-cyan);
+      font-weight: 700;
+    }
+
+    footer {
+      border-top: 1px solid var(--border-subtle);
+      padding: 2.5rem 2rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      background: var(--bg-primary);
+    }
+  </style>
+</head>
+<body>
+  <div class="tactical-grid"></div>
+
+  <header>
+    <div class="nav-container">
+      <div class="brand">
+        <span>🦅 KestrelCOP</span>
+        <span class="brand-badge"><span class="pulse-dot"></span> AIR-GAPPED DIL READY</span>
+      </div>
+      <nav>
+        <a href="#simulator">Live Telemetry</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#validation">Validation Matrix</a>
+        <a href="https://github.com/FranekJemiolo/KestrelCOP/blob/main/docs/VISION.md" target="_blank">VISION.md</a>
+        <a href="https://github.com/FranekJemiolo/KestrelCOP" target="_blank" class="btn-github">
+          <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Hero Section -->
+    <section class="hero">
+      <div class="hero-eyebrow">// OPERATIONAL INTENT & COMMON OPERATING PICTURE</div>
+      <h1>Tactical Edge Telemetry for Disconnected Warfare</h1>
+      <p>
+        Autonomous, offline-first tactical fusion pipeline designed for contested and GPS-degraded operations.
+        Replaces rigid, multi-million dollar defense architectures with attritable COTS hardware, open standards, and event-streaming resilience.
+      </p>
+      <div class="cta-group">
+        <a href="#simulator" class="btn-primary">Inspect Telemetry Stream</a>
+        <a href="https://github.com/FranekJemiolo/KestrelCOP" target="_blank" class="btn-secondary">Explore GitHub Repository</a>
+      </div>
+    </section>
+
+    <!-- Live Telemetry Simulator Panel -->
+    <section id="simulator">
+      <div class="simulator-panel">
+        <div class="sim-header">
+          <div class="sim-title">
+            <span class="pulse-dot"></span>
+            <span>TACTICAL EVENT BUS SIMULATOR (Cursor-on-Target JSON 2.0)</span>
+          </div>
+          <div class="sim-controls">
+            <button class="sim-btn" id="btn-gps" onclick="selectEvent('gps')">SIMULATE GPS TRACK</button>
+            <button class="sim-btn" id="btn-bio" onclick="selectEvent('biometric')">TRIGGER BIOMETRIC SPIKE</button>
+            <button class="sim-btn" id="btn-drone" onclick="selectEvent('detection')">YOLO DRONE DETECTION</button>
+          </div>
+        </div>
+        <div class="sim-body">
+          <div class="sim-feed">
+            <div class="feed-card active" id="card-gps" onclick="selectEvent('gps')">
+              <div class="feed-info">
+                <h4>Operator Scout-Alpha GPS Track</h4>
+                <p>LAT: 52.229712 | LON: 21.012234 | CE: 2.1m (UART NMEA)</p>
+              </div>
+              <span class="feed-badge" style="color: var(--accent-emerald);">QoS 0</span>
+            </div>
+            <div class="feed-card" id="card-bio" onclick="selectEvent('biometric')">
+              <div class="feed-info">
+                <h4>Tactical Biometric Sensor (TCCC)</h4>
+                <p>Heart Rate: 168 BPM (Tachycardia / Stress Spike)</p>
+              </div>
+              <span class="feed-badge" style="color: var(--accent-red);">QoS 1 ALERT</span>
+            </div>
+            <div class="feed-card" id="card-drone" onclick="selectEvent('detection')">
+              <div class="feed-info">
+                <h4>Recon Drone Edge YOLOv8 Inference</h4>
+                <p>Identified: armored_recon_vehicle (Confidence: 94.2%)</p>
+              </div>
+              <span class="feed-badge" style="color: var(--accent-amber);">TARGET PIN</span>
+            </div>
+          </div>
+          <pre class="sim-json-view" id="json-viewer"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 Tiers Architecture -->
+    <section id="architecture" style="margin-top: 5rem;">
+      <h2 class="section-title">The 4-Tier Zero-Cloud Architecture</h2>
+      <p class="section-sub">Strict physical and logical separation guarantees survivability when wide-area connectivity is severed.</p>
+
+      <div class="tier-grid">
+        <div class="tier-card">
+          <div class="tier-tag">Tier 1: Operator Edge Node</div>
+          <h3>Edge Compute & Sensor Bus</h3>
+          <p>Runs on chest-mounted ruggedized Android or Raspberry Pi 5. Ingests NMEA GPS and BLE biometrics on an async loop while isolating YOLO ML inference in a dedicated process.</p>
+          <ul class="tier-tech-list">
+            <li>Python 3.12+</li>
+            <li>Pydantic v2</li>
+            <li>aioserial</li>
+            <li>bleak</li>
+            <li>ONNX Runtime</li>
+          </ul>
+        </div>
+
+        <div class="tier-card">
+          <div class="tier-tag">Tier 2: Tactical Transport</div>
+          <h3>Mesh Radio Pub/Sub</h3>
+          <p>Emulates volatile MANET networks over local Mosquitto MQTT. Incorporates bounded collections.deque buffers to discard stale coordinates during prolonged RF blackouts.</p>
+          <ul class="tier-tech-list">
+            <li>Eclipse Mosquitto</li>
+            <li>aiomqtt</li>
+            <li>QoS 0 / QoS 1</li>
+            <li>Ring Buffering</li>
+          </ul>
+        </div>
+
+        <div class="tier-card">
+          <div class="tier-tag">Tier 3: Command Collector</div>
+          <h3>Immutable Event Backbone</h3>
+          <p>Runs on local k3s edge servers in the Tactical Operations Center. Commits all Cursor-on-Target events into an append-only Kafka log for real-time analytics and PostGIS indexing.</p>
+          <ul class="tier-tech-list">
+            <li>k3s</li>
+            <li>Strimzi Kafka</li>
+            <li>PostgreSQL 16</li>
+            <li>PostGIS 3.4</li>
+          </ul>
+        </div>
+
+        <div class="tier-card">
+          <div class="tier-tag">Tier 4: Tactical Web Dashboard</div>
+          <h3>Zero-Install Geospatial COP</h3>
+          <p>Progressive Web App rendering offline vector tiles via MapLibre GL JS and single-file PMTiles. Streams entity tracks at 60 FPS over WebSockets with MIL-STD-2525 symbology.</p>
+          <ul class="tier-tech-list">
+            <li>React PWA</li>
+            <li>MapLibre GL JS</li>
+            <li>PMTiles</li>
+            <li>WebSockets</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Validation Matrix Table -->
+    <section id="validation">
+      <h2 class="section-title">Operational Validation Matrix</h2>
+      <p class="section-sub">Definitive acceptance criteria mapping engineering milestones directly to battlefield readiness.</p>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Milestone</th>
+              <th>Component</th>
+              <th>Tactical Intent</th>
+              <th>Definitive Acceptance Test</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="col-milestone">M1</td>
+              <td>Schemas & Event Bus</td>
+              <td><strong>Data Integrity:</strong> Reject corrupted sensor inputs without crashing the node.</td>
+              <td>Inject malformed JSON/NMEA at 1,000 pkts/s; system must drop bad records and maintain event loop.</td>
+            </tr>
+            <tr>
+              <td class="col-milestone">M2</td>
+              <td>Asynchronous GPS & BLE</td>
+              <td><strong>Continuous Awareness:</strong> Automatic hardware reconnection resilience.</td>
+              <td>Unplug USB GPS and turn off BLE strap for 5 mins; stream must auto-recover in &lt; 3s upon reconnection.</td>
+            </tr>
+            <tr>
+              <td class="col-milestone">M3</td>
+              <td>Isolated ML Pipeline</td>
+              <td><strong>Zero Latency Starvation:</strong> Heavy vision processing cannot throttle vital metrics.</td>
+              <td>Run YOLO at 100% CPU utilization; biometric alerts must post to bus with zero queue starvation (&lt;15ms).</td>
+            </tr>
+            <tr>
+              <td class="col-milestone">M4</td>
+              <td>Mesh Transport Link</td>
+              <td><strong>DIL Network Resilience:</strong> Stale-data expiration upon reconnection.</td>
+              <td>Sever MQTT link for 10 mins; on reconnect, only freshest coordinates and alerts are published; stale tracks drop.</td>
+            </tr>
+            <tr>
+              <td class="col-milestone">M5</td>
+              <td>Edge Observability</td>
+              <td><strong>Field Deployability:</strong> Zero-touch single-command deployment.</td>
+              <td>Cold boot container stack on Raspberry Pi 5 with Wi-Fi disabled; achieve operational state in &lt; 15s.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Project KestrelCOP • Licensed under Apache-2.0 • Zero Proprietary Dependencies</p>
+    <p style="margin-top: 0.5rem; font-size: 0.75rem;">Tactical Common Operating Picture & Telemetry Pipeline for Contested Environments</p>
+  </footer>
+
+  <script>
+    const sampleEvents = {
+      gps: {
+        "event": {
+          "version": "2.0",
+          "uid": "kestrel-alpha-01",
+          "type": "a-f-G-U-C",
+          "time": new Date().toISOString(),
+          "start": new Date().toISOString(),
+          "stale": new Date(Date.now() + 30000).toISOString(),
+          "how": "m-g",
+          "point": {
+            "lat": 52.229712,
+            "lon": 21.012234,
+            "hae": 142.5,
+            "ce": 2.1,
+            "le": 3.4
+          },
+          "detail": {
+            "contact": {
+              "callsign": "ALPHA-1",
+              "endpoint": "192.168.1.101:4242"
+            },
+            "device": {
+              "battery_pct": 88,
+              "source": "u-blox-M8N-UART"
+            }
+          }
+        }
+      },
+      biometric: {
+        "event": {
+          "version": "2.0",
+          "uid": "kestrel-alpha-01-bio",
+          "type": "b-m-p-s-m",
+          "time": new Date().toISOString(),
+          "start": new Date().toISOString(),
+          "stale": new Date(Date.now() + 15000).toISOString(),
+          "how": "m-g",
+          "point": {
+            "lat": 52.229712,
+            "lon": 21.012234,
+            "hae": 142.5,
+            "ce": 2.1,
+            "le": 3.4
+          },
+          "detail": {
+            "contact": { "callsign": "ALPHA-1" },
+            "biometrics": {
+              "heart_rate_bpm": 168,
+              "spo2_percent": 95,
+              "stress_state": "critical_exertion",
+              "tccc_triage_category": "URGENT"
+            }
+          }
+        }
+      },
+      detection: {
+        "event": {
+          "version": "2.0",
+          "uid": "kestrel-drone-overwatch-01",
+          "type": "a-u-G-E-V",
+          "time": new Date().toISOString(),
+          "start": new Date().toISOString(),
+          "stale": new Date(Date.now() + 45000).toISOString(),
+          "how": "m-a",
+          "point": {
+            "lat": 52.234105,
+            "lon": 21.019844,
+            "hae": 85.0,
+            "ce": 5.0,
+            "le": 8.0
+          },
+          "detail": {
+            "contact": { "callsign": "OVERWATCH-UAV" },
+            "sensor_payload": {
+              "target_classification": "armored_recon_vehicle",
+              "confidence": 0.942,
+              "model": "yolov8n-tactical.onnx",
+              "camera_bearing_deg": 142.6,
+              "estimated_range_m": 420.0
+            }
+          }
+        }
+      }
+    };
+
+    function selectEvent(type) {
+      document.querySelectorAll('.feed-card').forEach(c => c.classList.remove('active'));
+      const activeCard = document.getElementById('card-' + type);
+      if (activeCard) activeCard.classList.add('active');
+
+      const data = sampleEvents[type];
+      data.event.time = new Date().toISOString();
+      data.event.start = data.event.time;
+      data.event.stale = new Date(Date.now() + 30000).toISOString();
+
+      document.getElementById('json-viewer').textContent = JSON.stringify(data, null, 2);
+    }
+
+    // Initialize viewer with GPS event
+    selectEvent('gps');
+  </script>
+</body>
+</html>
