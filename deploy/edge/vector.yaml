@@ -1,0 +1,47 @@
+# -----------------------------------------------------------------------------
+# Vector Observability Agent Configuration for KestrelCOP Tactical Edge
+# Scrapes local logs/metrics and exposes Prometheus metrics endpoint
+# -----------------------------------------------------------------------------
+
+sources:
+  # Internal Vector telemetry
+  internal_metrics:
+    type: internal_metrics
+    scrape_interval_secs: 5
+
+  # Scrapes edge container logs via Docker engine or syslog socket
+  docker_logs:
+    type: docker_logs
+    exclude_containers:
+      - vector
+
+transforms:
+  # Parse structured tactical logs
+  parse_tactical_logs:
+    type: remap
+    inputs:
+      - docker_logs
+    source: |
+      .message_raw = .message
+      parsed, err = parse_regex(.message, r'^(?P<timestamp>\d{2}:\d{2}:\d{2})\s+\[(?P<level>\w+)\]\s+\[(?P<component>[^\]]+)\]\s+(?P<log_msg>.*)$')
+      if err == null {
+        .level = parsed.level
+        .component = parsed.component
+        .log_msg = parsed.log_msg
+      }
+
+sinks:
+  # Structured console output
+  stdout_sink:
+    type: console
+    inputs:
+      - parse_tactical_logs
+    encoding:
+      codec: text
+
+  # Prometheus metrics endpoint for local or k3s Prometheus scraping
+  prometheus_sink:
+    type: prometheus_exporter
+    inputs:
+      - internal_metrics
+    address: 0.0.0.0:9598

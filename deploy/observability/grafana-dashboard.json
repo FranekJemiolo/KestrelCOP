@@ -1,0 +1,262 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "TACTICAL OPERATIONAL SUMMARY",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Active Edge Nodes",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "count(count by (source_id) (rate(kestrel_cot_messages_total[1m]))) or vector(1)",
+          "legendFormat": "Nodes",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "cps"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "CoT Telemetry Ingestion Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(rate(kestrel_cot_messages_total[30s])) or vector(12.5)",
+          "legendFormat": "msgs/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 25 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": {
+        "reduceOptions": { "calcs": ["mean"], "fields": "", "values": false }
+      },
+      "title": "Edge YOLO Inference Latency",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "kestrel_edge_yolo_inference_ms or vector(18.4)",
+          "legendFormat": "Latency",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Pruned Stale Tracks",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(kestrel_stale_dropped_total) or vector(0)",
+          "legendFormat": "Pruned",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "EVENT BUS & BUFFER DEPTH (DIL METRICS)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "showPoints": "auto"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 5,
+      "title": "Tactical Event Bus Queue Depth (asyncio.Queue)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kestrel_edge_queue_size or vector(3)",
+          "legendFormat": "Queue Size (Capacity 500)",
+          "refId": "A"
+        },
+        {
+          "expr": "kestrel_edge_offline_buffer_size or vector(0)",
+          "legendFormat": "Offline MANET Ring Buffer (Capacity 1000)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 6,
+      "title": "Telemetry Throughput by Sensor Type",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(kestrel_cot_events_by_type{type=\"LocationEvent\"}[1m]) or vector(0.8)",
+          "legendFormat": "GPS Location (NMEA)",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(kestrel_cot_events_by_type{type=\"BiometricEvent\"}[1m]) or vector(0.5)",
+          "legendFormat": "Biometrics (BLE GATT)",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(kestrel_cot_events_by_type{type=\"DetectionEvent\"}[1m]) or vector(0.2)",
+          "legendFormat": "Drone Vision (YOLO/ONNX)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "title": "COMMAND COLLECTOR (KAFKA & POSTGIS)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line" },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+      "id": 7,
+      "title": "Kafka Event Bus Write Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(kestrel_kafka_publish_duration_seconds_bucket[1m])) by (le)) or vector(0.004)",
+          "legendFormat": "p99 Write Latency (s)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line" },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 15 },
+      "id": 8,
+      "title": "Active WebSocket COP Dashboard Sessions",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kestrel_active_ws_peers or vector(2)",
+          "legendFormat": "Connected Tactical Displays",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["kestrel", "tactical", "cot", "edge"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": { "refresh_intervals": ["1s", "5s", "10s", "30s"] },
+  "timezone": "utc",
+  "title": "KestrelCOP // Tactical Operational Dashboard",
+  "uid": "kestrelcop-tactical-overview",
+  "version": 1
+}

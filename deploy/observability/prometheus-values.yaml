@@ -1,0 +1,51 @@
+# -----------------------------------------------------------------------------
+# Helm Values for kube-prometheus-stack (Air-Gapped k3s / minikube Deployment)
+# -----------------------------------------------------------------------------
+
+defaultRules:
+  create: true
+  rules:
+    alertmanager: false
+    etcd: false
+    kubeScheduler: false
+
+alertmanager:
+  enabled: false
+
+grafana:
+  enabled: true
+  adminPassword: "kestrel_tactical_admin"
+  service:
+    type: ClusterIP
+    port: 3000
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folder: /var/lib/grafana/dashboards/tactical
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector: {}
+    scrapeInterval: 5s
+    evaluationInterval: 5s
+    retention: 7d
+
+    # Additional scrape configs for edge nodes and external agents
+    additionalScrapeConfigs:
+      - job_name: "kestrel-collector"
+        metrics_path: "/metrics"
+        scrape_interval: 2s
+        static_configs:
+          - targets: ["kestrel-collector.kestrel.svc.cluster.local:9090", "kestrel-collector.kestrel.svc.cluster.local:8080"]
+
+      - job_name: "kestrel-vector-edge"
+        metrics_path: "/metrics"
+        scrape_interval: 2s
+        static_configs:
+          - targets: ["kestrel-vector:9598"]

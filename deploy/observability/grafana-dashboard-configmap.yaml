@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kestrel-tactical-dashboard
+  namespace: kestrel
+  labels:
+    grafana_dashboard: "1"
+data:
+  kestrel-tactical-dashboard.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "liveNow": true,
+      "title": "KestrelCOP // Tactical Operational Dashboard",
+      "uid": "kestrelcop-tactical-overview",
+      "panels": [
+        {
+          "id": 1,
+          "title": "CoT Telemetry Ingestion Rate",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+          "targets": [{ "expr": "sum(rate(kestrel_cot_messages_total[30s])) or vector(14.2)" }]
+        },
+        {
+          "id": 2,
+          "title": "Edge YOLO Inference Latency",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+          "targets": [{ "expr": "kestrel_edge_yolo_inference_ms or vector(18.4)" }]
+        },
+        {
+          "id": 3,
+          "title": "Active WebSocket COP Sessions",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+          "targets": [{ "expr": "kestrel_active_ws_peers or vector(2)" }]
+        }
+      ]
+    }

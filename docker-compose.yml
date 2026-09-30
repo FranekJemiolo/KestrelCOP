@@ -1,0 +1,66 @@
+version: "3.8"
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Eclipse Mosquitto: Tactical MANET Mesh MQTT Broker
+  # ---------------------------------------------------------------------------
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: kestrel-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./deploy/edge/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    networks:
+      - tactical-mesh
+
+  # ---------------------------------------------------------------------------
+  # 2. Python Edge Ingestion Service: Sensors, YOLO/ONNX ML, CoT Serializer
+  # ---------------------------------------------------------------------------
+  kestrel-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kestrel-edge-node
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      - PYTHONUNBUFFERED=1
+      - KESTREL_MOCK_MODE=true
+      - KESTREL_BROKER_HOST=mosquitto
+      - KESTREL_BROKER_PORT=1883
+      # Real hardware overrides (mount /dev/ttyUSB0 or /dev/video0 if available):
+      # - KESTREL_SERIAL_PORT=/dev/ttyUSB0
+      # - KESTREL_VIDEO_SOURCE=/dev/video0
+    # devices:
+    #   - "/dev/ttyUSB0:/dev/ttyUSB0"
+    #   - "/dev/video0:/dev/video0"
+    networks:
+      - tactical-mesh
+
+  # ---------------------------------------------------------------------------
+  # 3. Vector: Edge Observability & Prometheus Exporter
+  # ---------------------------------------------------------------------------
+  vector:
+    image: timberio/vector:0.38.0-alpine
+    container_name: kestrel-vector
+    restart: unless-stopped
+    ports:
+      - "9598:9598"  # Prometheus metrics endpoint
+    volumes:
+      - ./deploy/edge/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - tactical-mesh
+
+networks:
+  tactical-mesh:
+    driver: bridge
+    name: kestrel-tactical-net
+
+volumes:
+  mosquitto-data:

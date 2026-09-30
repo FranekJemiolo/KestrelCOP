@@ -7,13 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Lint, Type Check & Test
+  edge-python:
+    name: Edge Node (Python 3.12)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,8 +20,8 @@ jobs:
           enable-cache: true
           version: "latest"
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+      - name: Set up Python 3.12
+        run: uv python install 3.12
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -41,3 +37,42 @@ jobs:
 
       - name: Run Tests (pytest)
         run: uv run pytest --maxfail=1 --disable-warnings -v
+
+  backend-go:
+    name: Command Collector Backend (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: backend/go.sum
+
+      - name: Run Go Unit Tests
+        run: cd backend && go test -v -race ./...
+
+      - name: Build Collector Binary
+        run: cd backend && CGO_ENABLED=0 go build -v -o /dev/null ./cmd/collector
+
+  frontend-react:
+    name: Tactical Dashboard (React PWA)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Dependencies
+        run: cd frontend && npm ci
+
+      - name: Build PWA Bundle
+        run: cd frontend && npm run build

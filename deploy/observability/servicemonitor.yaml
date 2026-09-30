@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kestrel-collector-monitor
+  namespace: kestrel
+  labels:
+    release: prometheus-stack
+    app: kestrel-collector
+spec:
+  selector:
+    matchLabels:
+      app: kestrel-collector
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 2s
+      scrapeTimeout: 2s

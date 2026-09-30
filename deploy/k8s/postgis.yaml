@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgis-init-scripts
+  namespace: kestrel
+data:
+  01_init_cop_schema.sql: |
+    CREATE EXTENSION IF NOT EXISTS postgis;
+
+    -- Master table for all ingested Cursor-on-Target events
+    CREATE TABLE IF NOT EXISTS cot_events (
+        id BIGSERIAL PRIMARY KEY,
+        uid VARCHAR(128) NOT NULL,
+        cot_type VARCHAR(64) NOT NULL,
+        how VARCHAR(16) NOT NULL DEFAULT 'm-g',
+        event_time TIMESTAMPTZ NOT NULL,
+        start_time TIMESTAMPTZ NOT NULL,
+        stale_time TIMESTAMPTZ NOT NULL,
+        latitude DOUBLE PRECISION NOT NULL,
+        longitude DOUBLE PRECISION NOT NULL,
+        hae REAL DEFAULT 0.0,
+        ce REAL DEFAULT 0.0,
+        le REAL DEFAULT 0.0,
+        detail JSONB DEFAULT '{}'::jsonb,
+        geom GEOMETRY(Point, 4326),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Auto-populate WGS84 geometry point from lat/lon
+    CREATE OR REPLACE FUNCTION set_cot_geometry()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.geom := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_set_cot_geometry ON cot_events;
+    CREATE TRIGGER trg_set_cot_geometry
+    BEFORE INSERT OR UPDATE ON cot_events
+    FOR EACH ROW
+    EXECUTE FUNCTION set_cot_geometry();
+
+    -- High-speed spatial and temporal indices for TOC COP range queries
+    CREATE INDEX IF NOT EXISTS idx_cot_geom ON cot_events USING GIST (geom);
+    CREATE INDEX IF NOT EXISTS idx_cot_time ON cot_events (event_time DESC);
+    CREATE INDEX IF NOT EXISTS idx_cot_uid_time ON cot_events (uid, event_time DESC);
+    CREATE INDEX IF NOT EXISTS idx_cot_type ON cot_events (cot_type);
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgis
+  namespace: kestrel
+  labels:
+    app: postgis
+spec:
+  ports:
+    - port: 5432
+      name: postgres
+  clusterIP: None
+  selector:
+    app: postgis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgis
+  namespace: kestrel
+spec:
+  serviceName: postgis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgis
+  template:
+    metadata:
+      labels:
+        app: postgis
+    spec:
+      containers:
+        - name: postgis
+          image: postgis/postgis:16-3.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: "kestrel_cop"
+            - name: POSTGRES_USER
+              value: "kestrel"
+            - name: POSTGRES_PASSWORD
+              value: "kestrel_secure_tactical_pass"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          volumeMounts:
+            - name: postgis-storage
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgis-init-scripts
+  volumeClaimTemplates:
+    - metadata:
+        name: postgis-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
