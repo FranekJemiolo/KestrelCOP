@@ -8,9 +8,21 @@ import './index.css'
 
 export function App() {
   const [entitiesMap, setEntitiesMap] = useState<Map<string, TacticalEntity>>(new Map())
-  const [selectedUid, setSelectedUid] = useState<string | null>(null)
+  const [selectedUid, setSelectedUid] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      return params.get('selected') || null
+    }
+    return null
+  })
   const [isConnected, setIsConnected] = useState<boolean>(false)
-  const [isSimRunning, setIsSimRunning] = useState<boolean>(false)
+  const [isSimRunning, setIsSimRunning] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      return params.get('sim') === 'true' || params.has('demo')
+    }
+    return false
+  })
 
   // Initialize WebSocket service
   const wsService = useMemo(() => new TacticalWebSocketService(), [])
@@ -122,10 +134,17 @@ export function App() {
     let lon = 21.0122
     let hr = 76
 
-    const simTimer = setInterval(() => {
+    const emitTick = () => {
       lat += (Math.random() - 0.48) * 0.0003
       lon += (Math.random() - 0.48) * 0.0003
       hr = Math.min(175, Math.max(65, hr + Math.floor((Math.random() - 0.45) * 6)))
+
+      const forceAlert =
+        typeof window !== 'undefined' &&
+        (new URLSearchParams(window.location.search).get('alert') === 'true' ||
+          new URLSearchParams(window.location.search).has('tccc'))
+      const currentHr = forceAlert ? 172 : hr
+      const isAlert = forceAlert || currentHr > 155
 
       // 1. Operator Scout-Alpha GPS track
       handleCoTMessage({
@@ -136,36 +155,57 @@ export function App() {
           how: 'm-g',
           time: new Date().toISOString(),
           start: new Date().toISOString(),
-          stale: new Date(Date.now() + 15000).toISOString(),
+          stale: new Date(Date.now() + 25000).toISOString(),
           point: { lat, lon, hae: 138.0, ce: 2.2 },
           detail: {
             contact: { callsign: 'SCOUT-ALPHA' },
-            biometrics: { heart_rate_bpm: hr, tccc_alert: hr > 160 },
+            biometrics: { heart_rate_bpm: currentHr, tccc_alert: isAlert },
+            track: { speed: 4.8, course: 132.5 },
           },
         },
       })
 
       // 2. Recon Drone Target Detection
-      if (Math.random() > 0.4) {
-        handleCoTMessage({
-          event: {
-            version: '2.0',
-            uid: 'target-overwatch-01',
-            type: 'a-u-G-E-V',
-            how: 'm-a',
-            time: new Date().toISOString(),
-            start: new Date().toISOString(),
-            stale: new Date(Date.now() + 25000).toISOString(),
-            point: { lat: lat + 0.0035, lon: lon + 0.0028, hae: 75.0, ce: 8.0 },
-            detail: {
-              contact: { callsign: 'UNKNOWN CONTACT #01' },
-              sensor_payload: { label: 'armored_vehicle', confidence: 0.94 },
-            },
+      handleCoTMessage({
+        event: {
+          version: '2.0',
+          uid: 'target-overwatch-01',
+          type: 'a-u-G-E-V',
+          how: 'm-a',
+          time: new Date().toISOString(),
+          start: new Date().toISOString(),
+          stale: new Date(Date.now() + 35000).toISOString(),
+          point: { lat: lat + 0.0035, lon: lon + 0.0028, hae: 75.0, ce: 8.0 },
+          detail: {
+            contact: { callsign: 'UNKNOWN CONTACT #01' },
+            sensor_payload: { label: 'armored_vehicle', confidence: 0.94 },
+            track: { speed: 38.0, course: 220.0 },
           },
-        })
-      }
-    }, 2000)
+        },
+      })
 
+      // 3. Squad Lead Echo-02
+      handleCoTMessage({
+        event: {
+          version: '2.0',
+          uid: 'kestrel-echo-02',
+          type: 'a-f-G-U-C',
+          how: 'm-g',
+          time: new Date().toISOString(),
+          start: new Date().toISOString(),
+          stale: new Date(Date.now() + 30000).toISOString(),
+          point: { lat: lat - 0.0025, lon: lon - 0.0032, hae: 142.0, ce: 1.8 },
+          detail: {
+            contact: { callsign: 'ECHO-02-LEAD' },
+            biometrics: { heart_rate_bpm: 82, tccc_alert: false },
+            track: { speed: 3.2, course: 85.0 },
+          },
+        },
+      })
+    }
+
+    emitTick()
+    const simTimer = setInterval(emitTick, 2000)
     return () => clearInterval(simTimer)
   }, [isSimRunning, handleCoTMessage])
 

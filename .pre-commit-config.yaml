@@ -26,4 +26,5 @@ repos:
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-added-large-files
+        args: ['--maxkb=2500']
       - id: check-toml

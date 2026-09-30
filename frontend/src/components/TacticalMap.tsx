@@ -155,7 +155,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     }
   }, [entities, onSelectEntity])
 
-  // Center on selected entity
+  // Center on selected entity and show tactical popup
   useEffect(() => {
     const map = mapInstance.current
     if (!map || !selectedUid) return
@@ -164,9 +164,14 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     if (target) {
       map.flyTo({
         center: [target.lon, target.lat],
-        zoom: Math.max(map.getZoom(), 14),
+        zoom: Math.max(map.getZoom(), 14.5),
         speed: 1.2,
       })
+
+      const marker = markersRef.current.get(selectedUid)
+      if (marker && (!marker.getPopup() || !marker.getPopup().isOpen())) {
+        marker.togglePopup()
+      }
     }
   }, [selectedUid, entities])
 
