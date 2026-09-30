@@ -70,6 +70,7 @@ no_implicit_optional = true
 [[tool.mypy.overrides]]
 module = [
     "cv2.*",
+    "onnx.*",
     "onnxruntime.*",
     "aioserial.*",
     "bleak.*",

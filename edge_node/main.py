@@ -1,25 +1,25 @@
 """KestrelCOP Edge Node Main Daemon.
 
-Scaffolds the central asynchronous event bus (asyncio.Queue), sensor producers,
-and the Cursor-on-Target serialization consumer.
+Integrates:
+  - Asynchronous GPS NMEA ingestion (aioserial / mock parser)
+  - Asynchronous BLE Biometrics ingestion (bleak / mock GATT parser)
+  - Isolated Multiprocessing ML Drone Vision inference (cv2 + onnxruntime)
+  - Resilient Cursor-on-Target serialization and MQTT mesh publisher (aiomqtt)
 """
 
+import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
-from collections import deque
-from datetime import UTC, datetime
 
-from edge_node.cot_mapper import telemetry_to_cot_json
-from edge_node.models import (
-    BiometricEvent,
-    DetectionEvent,
-    LocationEvent,
-    TelemetryEvent,
-)
+from edge_node.ble_worker import run_ble_worker
+from edge_node.gps_worker import run_gps_worker
+from edge_node.ml_worker import TacticalMlPipeline
+from edge_node.models import TelemetryEvent
+from edge_node.publisher import MqttTacticalPublisher
 
-# Configure structured tactical logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -29,17 +29,16 @@ logger = logging.getLogger("edge_node")
 
 
 class TacticalEventBus:
-    """Bounded in-memory event bus decoupling ingestion from transmission."""
+    """Bounded in-memory event bus decoupling multi-sensor ingestion from network broadcast."""
 
     def __init__(self, maxsize: int = 500) -> None:
         self.queue: asyncio.Queue[TelemetryEvent] = asyncio.Queue(maxsize=maxsize)
         self.dropped_count: int = 0
 
     async def put(self, event: TelemetryEvent) -> None:
-        """Enqueue an event; if full, drops oldest to preserve fresh state."""
+        """Enqueue an event; if full, drops oldest to preserve fresh tactical state."""
         if self.queue.full():
             try:
-                # Evict oldest item to ensure freshest telemetry takes precedence
                 _ = self.queue.get_nowait()
                 self.queue.task_done()
                 self.dropped_count += 1
@@ -56,6 +55,10 @@ class TacticalEventBus:
         """Retrieve the next telemetry event."""
         return await self.queue.get()
 
+    def get_nowait(self) -> TelemetryEvent:
+        """Retrieve next event without awaiting."""
+        return self.queue.get_nowait()
+
     def task_done(self) -> None:
         """Mark event task as done."""
         self.queue.task_done()
@@ -65,213 +68,182 @@ class TacticalEventBus:
         return self.queue.qsize()
 
 
-async def mock_gps_producer(
-    bus: TacticalEventBus,
-    shutdown_event: asyncio.Event,
-    interval_seconds: float = 2.0,
+async def run_edge_node(
+    broker_host: str = "127.0.0.1",
+    broker_port: int = 1883,
+    mock_mode: bool = True,
+    duration_seconds: float | None = None,
+    serial_port: str | None = None,
+    ble_address: str | None = None,
+    video_source: str | int | None = None,
+    model_path: str | None = None,
 ) -> None:
-    """Simulate asynchronous UART NMEA GPS ingestion (aioserial worker placeholder)."""
-    logger.info("GPS Ingestion Worker initialized (target: 0.5 Hz)")
-    lat, lon = 52.2297, 21.0122
+    """Launch and manage the complete KestrelCOP Edge Node lifecycle."""
+    logger.info("Initializing KestrelCOP Tactical Edge Node [v0.1.0]...")
+    logger.info(
+        "Config: mock_mode=%s, broker=%s:%d, video_source=%s",
+        mock_mode,
+        broker_host,
+        broker_port,
+        video_source or "synthetic",
+    )
 
-    while not shutdown_event.is_set():
-        try:
-            # Simulate slight tactical troop displacement
-            lat += 0.00005
-            lon += 0.00003
-
-            event = LocationEvent(
-                source_id="kestrel-alpha-01",
-                timestamp=datetime.now(UTC),
-                latitude=lat,
-                longitude=lon,
-                altitude_m=135.2,
-                circular_error_m=1.8,
-                speed_mps=1.4,
-                heading_deg=45.0,
-            )
-            await bus.put(event)
-            logger.debug("Emitted LocationEvent: lat=%.6f, lon=%.6f", lat, lon)
-
-            await asyncio.wait_for(shutdown_event.wait(), timeout=interval_seconds)
-        except TimeoutError:
-            continue
-        except Exception as exc:
-            logger.error("Error in GPS ingestion worker: %s", exc)
-
-    logger.info("GPS Ingestion Worker terminated cleanly.")
-
-
-async def mock_biometrics_producer(
-    bus: TacticalEventBus,
-    shutdown_event: asyncio.Event,
-    interval_seconds: float = 3.5,
-) -> None:
-    """Simulate asynchronous BLE Heart Rate ingestion (bleak worker placeholder)."""
-    logger.info("BLE Biometric Worker initialized")
-    current_hr = 78
-
-    while not shutdown_event.is_set():
-        try:
-            # Fluctuate heart rate slightly
-            current_hr = min(175, max(65, current_hr + 2))
-            is_alert = current_hr > 150
-
-            event = BiometricEvent(
-                source_id="kestrel-alpha-01",
-                timestamp=datetime.now(UTC),
-                heart_rate_bpm=current_hr,
-                spo2_percent=98.5,
-                skin_temp_c=36.4,
-                stress_level="nominal" if not is_alert else "elevated",
-                tccc_alert=is_alert,
-            )
-            await bus.put(event)
-            logger.debug("Emitted BiometricEvent: HR=%d bpm", current_hr)
-
-            await asyncio.wait_for(shutdown_event.wait(), timeout=interval_seconds)
-        except TimeoutError:
-            continue
-        except Exception as exc:
-            logger.error("Error in Biometric worker: %s", exc)
-
-    logger.info("BLE Biometric Worker terminated cleanly.")
-
-
-async def mock_detection_producer(
-    bus: TacticalEventBus,
-    shutdown_event: asyncio.Event,
-    interval_seconds: float = 5.0,
-) -> None:
-    """Simulate computer vision detections bridging from multiprocessing ML process."""
-    logger.info("YOLO/ONNX IPC Receiver Worker initialized")
-
-    while not shutdown_event.is_set():
-        try:
-            event = DetectionEvent(
-                source_id="kestrel-drone-overwatch",
-                timestamp=datetime.now(UTC),
-                label="armored_recon_vehicle",
-                confidence=0.935,
-                bbox=(0.25, 0.35, 0.65, 0.75),
-                bearing_deg=132.5,
-                range_m=340.0,
-                estimated_lat=52.2341,
-                estimated_lon=21.0198,
-            )
-            await bus.put(event)
-            logger.debug("Emitted DetectionEvent: %s (conf: %.2f)", event.label, event.confidence)
-
-            await asyncio.wait_for(shutdown_event.wait(), timeout=interval_seconds)
-        except TimeoutError:
-            continue
-        except Exception as exc:
-            logger.error("Error in Detection receiver worker: %s", exc)
-
-    logger.info("YOLO/ONNX IPC Receiver Worker terminated cleanly.")
-
-
-async def cot_assembly_consumer(
-    bus: TacticalEventBus,
-    shutdown_event: asyncio.Event,
-) -> None:
-    """Consume events from the bus, serialize into CoT JSON, and simulate MQTT broadcast."""
-    logger.info("Cursor-on-Target (CoT) Assembler & Publisher Consumer initialized")
-    last_known_location: LocationEvent | None = None
-    recent_events_buffer: deque[str] = deque(maxlen=100)
-
-    while not shutdown_event.is_set() or bus.qsize > 0:
-        try:
-            try:
-                event = await asyncio.wait_for(bus.get(), timeout=1.0)
-            except TimeoutError:
-                continue
-
-            if isinstance(event, LocationEvent):
-                last_known_location = event
-
-            # Transform into CoT JSON
-            cot_json = telemetry_to_cot_json(
-                event=event,
-                last_known_location=last_known_location,
-                stale_duration_seconds=30.0,
-            )
-
-            recent_events_buffer.append(cot_json)
-            bus.task_done()
-
-            # Mock transmission log (simulating MQTT publish to tactical mesh)
-            event_type = type(event).__name__
-            logger.info(
-                "TRANSMIT [CoT]: %s for %s (Queue remaining: %d)",
-                event_type,
-                event.source_id,
-                bus.qsize,
-            )
-
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            logger.error("Error during CoT serialization/broadcast: %s", exc)
-
-    logger.info("CoT Assembler Consumer drained remaining events and stopped.")
-
-
-async def run_edge_node(max_iterations: int | None = None) -> None:
-    """Run the edge node application loop.
-
-    Args:
-        max_iterations: Optional cutoff for testing or benchmarks.
-    """
-    logger.info("Starting KestrelCOP Tactical Edge Node v0.1.0...")
-
-    bus = TacticalEventBus(maxsize=100)
+    bus = TacticalEventBus(maxsize=500)
     shutdown_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
 
-    def handle_signal() -> None:
+    def signal_handler() -> None:
         logger.info("Received termination signal; initiating graceful tactical shutdown...")
         shutdown_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, handle_signal)
+            loop.add_signal_handler(sig, signal_handler)
         except NotImplementedError:
-            # Fallback for environments without signal handler support (e.g. Windows)
             pass
 
-    # Launch background worker tasks
-    producer_tasks = [
-        asyncio.create_task(mock_gps_producer(bus, shutdown_event)),
-        asyncio.create_task(mock_biometrics_producer(bus, shutdown_event)),
-        asyncio.create_task(mock_detection_producer(bus, shutdown_event)),
-    ]
-    consumer_task = asyncio.create_task(cot_assembly_consumer(bus, shutdown_event))
+    # 1. Initialize and launch isolated Multiprocessing ML Pipeline
+    ml_pipeline = TacticalMlPipeline(
+        bus=bus,
+        video_source=video_source,
+        model_path=model_path,
+        source_id="kestrel-drone-overwatch",
+        fps_limit=2.0,
+    )
+    ml_pipeline.start()
 
-    if max_iterations is not None:
-        # If running in benchmark/limited mode
-        await asyncio.sleep(max_iterations)
+    # 2. Initialize Tactical MQTT Publisher
+    publisher = MqttTacticalPublisher(
+        broker_host=broker_host,
+        broker_port=broker_port,
+        topic_prefix="tactical/kestrel",
+        buffer_max_size=1000,
+    )
+
+    # 3. Assemble concurrent asynchronous worker tasks
+    tasks = [
+        asyncio.create_task(
+            run_gps_worker(
+                bus=bus,
+                shutdown_event=shutdown_event,
+                port=serial_port,
+                source_id="kestrel-alpha-01",
+                poll_interval_seconds=1.0,
+                mock_mode=mock_mode,
+            ),
+            name="GPSWorker",
+        ),
+        asyncio.create_task(
+            run_ble_worker(
+                bus=bus,
+                shutdown_event=shutdown_event,
+                device_address=ble_address,
+                source_id="kestrel-alpha-01",
+                poll_interval_seconds=2.0,
+                mock_mode=mock_mode,
+            ),
+            name="BLEWorker",
+        ),
+        asyncio.create_task(
+            ml_pipeline.run_async_bridge(shutdown_event),
+            name="MLBridge",
+        ),
+        asyncio.create_task(
+            publisher.run(bus=bus, shutdown_event=shutdown_event, mock_publish=mock_mode),
+            name="MQTTPublisher",
+        ),
+    ]
+
+    try:
+        if duration_seconds is not None:
+            logger.info("Running for specified duration: %.1f seconds...", duration_seconds)
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=duration_seconds)
+            except TimeoutError:
+                logger.info("Duration elapsed; triggering shutdown...")
+                shutdown_event.set()
+        else:
+            await shutdown_event.wait()
+
+    finally:
+        logger.info("Stopping all edge node tasks...")
         shutdown_event.set()
 
-    # Await until shutdown signal is triggered
-    await shutdown_event.wait()
-    logger.info("Stopping producer tasks...")
+        # Stop isolated ML subprocess first
+        ml_pipeline.stop()
 
-    # Wait for producers to exit
-    await asyncio.gather(*producer_tasks, return_exceptions=True)
+        # Await completion of all async tasks
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info(
+            "Edge node stopped. Published: %d, buffered: %d, stale dropped: %d",
+            publisher.messages_published,
+            publisher.messages_buffered,
+            publisher.stale_dropped_count,
+        )
 
-    # Wait for consumer to drain remaining events
-    await consumer_task
-    logger.info("KestrelCOP Edge Node shutdown complete.")
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="KestrelCOP Tactical Edge Node Daemon")
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        default=os.getenv("KESTREL_MOCK_MODE", "true").lower() in ("true", "1", "yes"),
+        help="Run in mock/simulation mode (no physical hardware required)",
+    )
+    parser.add_argument(
+        "--broker-host",
+        default=os.getenv("KESTREL_BROKER_HOST", "127.0.0.1"),
+        help="MQTT broker host address",
+    )
+    parser.add_argument(
+        "--broker-port",
+        type=int,
+        default=int(os.getenv("KESTREL_BROKER_PORT", "1883")),
+        help="MQTT broker port number",
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="Optional runtime duration in seconds",
+    )
+    parser.add_argument(
+        "--serial-port",
+        default=os.getenv("KESTREL_SERIAL_PORT", None),
+        help="Serial port for GPS receiver (e.g., /dev/ttyUSB0)",
+    )
+    parser.add_argument(
+        "--ble-address",
+        default=os.getenv("KESTREL_BLE_ADDRESS", None),
+        help="Bluetooth MAC or UUID of heart rate sensor",
+    )
+    parser.add_argument(
+        "--video-source",
+        default=os.getenv("KESTREL_VIDEO_SOURCE", None),
+        help="Path to test MP4 video file or RTSP stream URL",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
-    """Entry point for command line invocation."""
+    """Command line entrypoint."""
+    args = parse_args()
     try:
-        asyncio.run(run_edge_node())
+        asyncio.run(
+            run_edge_node(
+                broker_host=args.broker_host,
+                broker_port=args.broker_port,
+                mock_mode=args.mock,
+                duration_seconds=args.duration,
+                serial_port=args.serial_port,
+                ble_address=args.ble_address,
+                video_source=args.video_source,
+            )
+        )
     except KeyboardInterrupt:
-        logger.info("Process halted by operator keyboard interrupt.")
+        logger.info("Terminated by keyboard interrupt.")
         sys.exit(0)
 
 

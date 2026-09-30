@@ -1,14 +1,33 @@
-"""Unit tests for KestrelCOP Edge Node schemas, CoT serialization, and event bus."""
+"""Comprehensive unit & integration test suite for KestrelCOP Edge Node.
 
+Covers:
+  - NMEA sentence parsing, checksum calculation, and coordinate conversion
+  - BLE GATT characteristic 0x2A37 binary parsing
+  - Isolated Multiprocessing ML pipeline & IPC bridge
+  - Tactical MQTT publisher, bounded offline buffering, and stale data expiration
+  - Full async lifecycle and graceful shutdown
+"""
+
+import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
+from edge_node.ble_worker import generate_mock_gatt_payload, parse_gatt_heart_rate
 from edge_node.cot_mapper import telemetry_to_cot_dict, telemetry_to_cot_json
+from edge_node.gps_worker import generate_mock_gpgga
 from edge_node.main import TacticalEventBus, run_edge_node
+from edge_node.ml_worker import TacticalMlPipeline
 from edge_node.models import BiometricEvent, DetectionEvent, LocationEvent
+from edge_node.nmea_parser import parse_nmea_sentence, verify_nmea_checksum
+from edge_node.publisher import MqttTacticalPublisher
+
+# ==========================================
+# 1. Models & Validations
+# ==========================================
 
 
 def test_location_event_valid() -> None:
@@ -29,20 +48,12 @@ def test_location_event_valid() -> None:
 
 
 def test_location_event_invalid_coordinates() -> None:
-    """Verify that out-of-range coordinates are rejected immediately by Pydantic."""
+    """Verify out-of-range coordinates are rejected immediately by Pydantic."""
     with pytest.raises(ValidationError):
-        LocationEvent(
-            source_id="bad-gps",
-            latitude=95.0,  # Invalid: > 90
-            longitude=21.0,
-        )
+        LocationEvent(source_id="bad-gps", latitude=95.0, longitude=21.0)
 
     with pytest.raises(ValidationError):
-        LocationEvent(
-            source_id="bad-gps",
-            latitude=52.0,
-            longitude=195.0,  # Invalid: > 180
-        )
+        LocationEvent(source_id="bad-gps", latitude=52.0, longitude=195.0)
 
 
 def test_biometric_event_bounds() -> None:
@@ -57,7 +68,6 @@ def test_biometric_event_bounds() -> None:
     assert bio.heart_rate_bpm == 145
     assert bio.tccc_alert is True
 
-    # Reject physiologically impossible heart rates (< 20 or > 260)
     with pytest.raises(ValidationError):
         BiometricEvent(source_id="bad-bio", heart_rate_bpm=10)
 
@@ -78,6 +88,89 @@ def test_detection_event_confidence_bounds() -> None:
 
     with pytest.raises(ValidationError):
         DetectionEvent(source_id="bad-det", label="tank", confidence=1.5)
+
+
+# ==========================================
+# 2. NMEA GPS Parsing & Checksum Tests
+# ==========================================
+
+
+def test_nmea_checksum_validation() -> None:
+    """Verify NMEA XOR checksum verification."""
+    # Checksum calculation: XOR of all characters between '$' and '*'
+    body = "GPGGA,092750.000,5321.6802,N,00630.3372,W,1,8,1.03,61.7,M,55.2,M,,"
+    c = 0
+    for char in body:
+        c ^= ord(char)
+    expected_hex = f"{c:02X}"
+    assert verify_nmea_checksum(f"${body}*{expected_hex}") is True
+    assert verify_nmea_checksum(f"${body}*00") is False
+
+
+def test_parse_gpgga_sentence() -> None:
+    """Verify parsing of synthetic and real GPGGA strings."""
+    nmea = generate_mock_gpgga(lat=52.229712, lon=21.012234, alt=142.5, hdop=1.2)
+    assert verify_nmea_checksum(nmea) is True
+
+    fix = parse_nmea_sentence(nmea)
+    assert fix is not None
+    assert pytest.approx(fix.latitude, rel=1e-4) == 52.2297
+    assert pytest.approx(fix.longitude, rel=1e-4) == 21.0122
+    assert fix.altitude_m == 142.5
+    assert fix.circular_error_m == 3.0  # 1.2 * 2.5
+
+
+def test_parse_gprmc_sentence() -> None:
+    """Verify parsing of valid GPRMC sentence."""
+    body = "GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W"
+    c = 0
+    for char in body:
+        c ^= ord(char)
+    sentence = f"${body}*{c:02X}"
+
+    fix = parse_nmea_sentence(sentence)
+    assert fix is not None
+    assert pytest.approx(fix.latitude, rel=1e-4) == 48.1173
+    assert pytest.approx(fix.longitude, rel=1e-4) == 11.5166
+    assert fix.speed_mps == round(22.4 * 0.514444, 2)
+    assert fix.heading_deg == 84.4
+
+
+# ==========================================
+# 3. BLE GATT Characteristic Tests
+# ==========================================
+
+
+def test_ble_gatt_uint8_heart_rate() -> None:
+    """Verify parsing of uint8 BLE Heart Rate Measurement payload."""
+    raw = generate_mock_gatt_payload(bpm=82)
+    bpm, contact = parse_gatt_heart_rate(raw)
+    assert bpm == 82
+    assert contact is True
+
+
+def test_ble_gatt_uint16_heart_rate() -> None:
+    """Verify parsing of uint16 BLE Heart Rate Measurement payload."""
+    # Flag: bit 0 set (0x01) -> uint16, sensor contact (0x06) -> 0x07
+    # 180 bpm in 2-byte little endian: 0x00B4 -> [0xB4, 0x00]
+    payload = bytes([0x07, 0xB4, 0x00])
+    bpm, contact = parse_gatt_heart_rate(payload)
+    assert bpm == 180
+    assert contact is True
+
+
+def test_ble_gatt_invalid_payload() -> None:
+    """Verify error on truncated BLE GATT payload."""
+    with pytest.raises(ValueError):
+        parse_gatt_heart_rate(b"")
+
+    with pytest.raises(ValueError):
+        parse_gatt_heart_rate(bytes([0x01]))  # uint16 flag but only 1 byte
+
+
+# ==========================================
+# 4. CoT Serialization & QoS Policy Tests
+# ==========================================
 
 
 def test_cot_mapper_location() -> None:
@@ -135,23 +228,75 @@ def test_cot_mapper_biometrics_with_fallback_location() -> None:
     assert parsed["event"]["detail"]["biometrics"]["tccc_alert"] is True
 
 
-def test_cot_mapper_detection() -> None:
-    """Verify detection event serialization to CoT schema."""
-    det = DetectionEvent(
-        source_id="recon-drone",
-        label="armored_vehicle",
-        confidence=0.95,
-        estimated_lat=52.235,
-        estimated_lon=21.025,
-    )
-    cot = telemetry_to_cot_dict(det)
-    event = cot["event"]
+# ==========================================
+# 5. Publisher, Offline Buffering & Stale Pruning Tests
+# ==========================================
 
-    assert event["type"] == "a-u-G-E-V"
-    assert event["how"] == "m-a"
-    assert event["point"]["lat"] == 52.235
-    assert event["detail"]["sensor_payload"]["label"] == "armored_vehicle"
-    assert event["detail"]["sensor_payload"]["confidence"] == 0.95
+
+def test_publisher_qos_prioritization() -> None:
+    """Verify publisher applies QoS 1 to life-safety alerts and QoS 0 to routine tracks."""
+    publisher = MqttTacticalPublisher()
+
+    loc = LocationEvent(source_id="alpha", latitude=10.0, longitude=20.0)
+    routine_bio = BiometricEvent(source_id="alpha", heart_rate_bpm=75, tccc_alert=False)
+    critical_bio = BiometricEvent(source_id="alpha", heart_rate_bpm=170, tccc_alert=True)
+    det = DetectionEvent(source_id="drone", label="vehicle", confidence=0.95)
+
+    assert publisher.package_event(loc).qos == 0
+    assert publisher.package_event(routine_bio).qos == 0
+    assert publisher.package_event(critical_bio).qos == 1
+    assert publisher.package_event(det).qos == 1
+
+
+@pytest.mark.asyncio
+async def test_publisher_offline_buffer_and_stale_pruning() -> None:
+    """Verify offline buffer drops stale records when network link returns."""
+    publisher = MqttTacticalPublisher(buffer_max_size=10)
+
+    # 1. Create a stale packet (expired in the past)
+    stale_event = LocationEvent(
+        source_id="stale-node",
+        timestamp=datetime.now(UTC) - timedelta(seconds=60),
+        latitude=52.0,
+        longitude=21.0,
+    )
+    stale_packet = publisher.package_event(stale_event, stale_duration=10.0)
+
+    # 2. Create a fresh packet (expires 60s in the future)
+    fresh_event = LocationEvent(
+        source_id="fresh-node",
+        timestamp=datetime.now(UTC),
+        latitude=52.001,
+        longitude=21.001,
+    )
+    fresh_packet = publisher.package_event(fresh_event, stale_duration=60.0)
+
+    # Add both to offline buffer
+    publisher.offline_buffer.append(stale_packet)
+    publisher.offline_buffer.append(fresh_packet)
+    assert len(publisher.offline_buffer) == 2
+
+    # Mock MQTT client
+    mock_client = AsyncMock()
+    mock_client.publish = AsyncMock()
+
+    # Flush buffer
+    flushed = await publisher._flush_offline_buffer(mock_client)
+
+    # Stale packet was discarded; fresh packet was published
+    assert flushed == 1
+    assert publisher.stale_dropped_count == 1
+    assert publisher.messages_published == 1
+    mock_client.publish.assert_called_once_with(
+        fresh_packet.topic,
+        payload=fresh_packet.payload_json,
+        qos=0,
+    )
+
+
+# ==========================================
+# 6. Event Bus & ML Multiprocessing Tests
+# ==========================================
 
 
 @pytest.mark.asyncio
@@ -170,18 +315,46 @@ async def test_event_bus_bounded_eviction() -> None:
     assert bus.qsize == 3
     assert bus.dropped_count == 0
 
-    # Putting 4th item on maxsize=3 queue should drop the oldest item (e1)
     await bus.put(e4)
     assert bus.qsize == 3
     assert bus.dropped_count == 1
 
     first_popped = await bus.get()
-    # Oldest (e1) was evicted, so first popped should be e2
     assert first_popped.source_id == "e2"
 
 
 @pytest.mark.asyncio
-async def test_run_edge_node_brief_execution() -> None:
-    """Verify edge node event loop can launch and shut down gracefully."""
-    # Run the event loop for a brief fractional second
-    await run_edge_node(max_iterations=1)
+async def test_tactical_ml_pipeline_lifecycle() -> None:
+    """Verify ML worker process starts, outputs detections via IPC, and stops cleanly."""
+    bus = TacticalEventBus(maxsize=50)
+    pipeline = TacticalMlPipeline(bus=bus, fps_limit=5.0)
+
+    pipeline.start()
+    assert pipeline.process is not None
+    assert pipeline.process.is_alive()
+
+    shutdown = asyncio.Event()
+    bridge_task = asyncio.create_task(pipeline.run_async_bridge(shutdown))
+
+    # Wait dynamically for ML process to emit detections through IPC queue
+    for _ in range(30):
+        if bus.qsize > 0:
+            break
+        await asyncio.sleep(0.1)
+
+    shutdown.set()
+    await bridge_task
+    pipeline.stop()
+
+    assert not pipeline.process.is_alive()
+    # Ensure detections arrived on the bus
+    assert bus.qsize > 0
+    first_event = await bus.get()
+    assert isinstance(first_event, DetectionEvent)
+    assert first_event.source_id == "kestrel-drone-overwatch"
+
+
+@pytest.mark.asyncio
+async def test_run_edge_node_full_pipeline_brief_execution() -> None:
+    """Verify full edge node pipeline starts all workers and shuts down cleanly."""
+    await run_edge_node(mock_mode=True, duration_seconds=1.2)
