@@ -51,11 +51,9 @@ func main() {
 	if err != nil {
 		log.Printf("[INIT] PostGIS init note: %v", err)
 	}
-	defer repo.Close()
 
 	// 3. Initialize Apache Kafka Event Pipeline
 	kafkaPipeline := kafka.NewPipeline(kafkaBrokers, kafkaTopic, "kestrel-collector-group")
-	defer kafkaPipeline.Close()
 
 	// 4. Ingestion Pipeline Handler (invoked for each validated CoT message)
 	ingestionHandler := func(rawJSON []byte, parsed *models.CoTMessage) {
@@ -84,9 +82,6 @@ func main() {
 	if err != nil {
 		log.Printf("[INIT] MQTT subscriber init note: %v", err)
 	}
-	if sub != nil {
-		defer sub.Disconnect()
-	}
 
 	// 6. Launch HTTP & WebSocket Server
 	srv := server.NewServer(wsHub, repo)
@@ -109,13 +104,39 @@ func main() {
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
 
 	sig := <-stopChan
-	log.Printf("[SHUTDOWN] Received signal: %v. Initiating graceful shutdown...", sig)
+	log.Printf("[SHUTDOWN] Received termination signal (%v). Initiating graceful shutdown...", sig)
 
+	// Step A: Signal background routines to stop
+	cancel()
+
+	// Step B: Stop incoming HTTP and WebSocket connections
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("[SHUTDOWN] HTTP shutdown error: %v", err)
+		log.Printf("[SHUTDOWN] HTTP server shutdown error: %v", err)
+	} else {
+		log.Println("[SHUTDOWN] HTTP and WebSocket server stopped.")
+	}
+
+	// Step C: Disconnect tactical MQTT subscriber
+	if sub != nil {
+		sub.Disconnect()
+		log.Println("[SHUTDOWN] Tactical MQTT subscriber cleanly disconnected.")
+	}
+
+	// Step D: Cleanly commit Kafka consumer offsets and flush writer
+	if err := kafkaPipeline.Close(); err != nil {
+		log.Printf("[SHUTDOWN] Kafka pipeline close warning: %v", err)
+	} else {
+		log.Println("[SHUTDOWN] Kafka consumer offsets committed and producer flushed.")
+	}
+
+	// Step E: Drain and close PostGIS connection pool
+	if err := repo.Close(); err != nil {
+		log.Printf("[SHUTDOWN] PostGIS connection pool close warning: %v", err)
+	} else {
+		log.Println("[SHUTDOWN] PostGIS database connection pool closed.")
 	}
 
 	fmt.Println("🦅 KestrelCOP Collector halted cleanly.")

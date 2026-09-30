@@ -133,90 +133,133 @@ def run_ml_inference_process(
     while not stop_event.is_set():
         start_time = time.monotonic()
 
-        frame: np.ndarray | None = None
-        if not use_synthetic_video and cap is not None:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                # Loop video or reconnect
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                time.sleep(0.1)
-                continue
-        else:
-            # Generate synthetic 640x480 RGB frame simulating drone camera viewport
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(
-                frame,
-                f"KESTREL TACTICAL ISR // {datetime.now(UTC).strftime('%H:%M:%S')}",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 128),
-                2,
-            )
-
-        # Preprocess frame for YOLO [1, 3, 640, 640]
-        resized = cv2.resize(frame, (640, 640))
-        input_tensor = np.transpose(resized, (2, 0, 1)).astype(np.float32) / 255.0
-        input_tensor = np.expand_dims(input_tensor, axis=0)
-
-        # Execute Inference
-        detected_label: str | None = None
-        confidence: float = 0.0
-        bbox: tuple[float, float, float, float] | None = None
-
-        if session is not None:
-            try:
-                input_name = session.get_inputs()[0].name
-                outputs = session.run(None, {input_name: input_tensor})
-                # Check output predictions
-                if outputs and len(outputs) > 0:
-                    out = outputs[0]
-                    # Parse first candidate
-                    conf = float(out[0, 4, 0]) if out.shape[1] > 4 else 0.85
-                    if conf >= confidence_threshold:
-                        detected_label = labels[target_idx % len(labels)]
-                        confidence = conf
-                        bbox = (0.2, 0.3, 0.6, 0.7)
-            except Exception as exc:
-                proc_logger.debug("Inference iteration error: %s", exc)
-
-        if detected_label is None:
-            # Synthetic classification fallback
-            detected_label = labels[target_idx % len(labels)]
-            confidence = 0.91 + (0.01 * (target_idx % 7))
-            bbox = (0.25, 0.35, 0.65, 0.75)
-
-        target_idx += 1
-
-        # Emit DetectionEvent over IPC Queue
-        event = DetectionEvent(
-            source_id=source_id,
-            timestamp=datetime.now(UTC),
-            label=detected_label,
-            confidence=round(confidence, 3),
-            bbox=bbox,
-            bearing_deg=135.0,
-            range_m=380.0,
-            estimated_lat=52.234105,
-            estimated_lon=21.019844,
-        )
-
         try:
-            ipc_queue.put_nowait(event)
-            proc_logger.debug(
-                "IPC emitted DetectionEvent: %s (conf: %.2f)",
-                event.label,
-                event.confidence,
+            frame: np.ndarray | None = None
+            if not use_synthetic_video and cap is not None:
+                try:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        # Loop video or reconnect
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        time.sleep(0.1)
+                        continue
+                except (cv2.error, OSError, Exception) as cap_err:
+                    proc_logger.warning("Frame capture failure: %s. Reconnecting...", cap_err)
+                    time.sleep(0.2)
+                    continue
+            else:
+                # Generate synthetic 640x480 RGB frame simulating drone camera viewport
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(
+                    frame,
+                    f"KESTREL TACTICAL ISR // {datetime.now(UTC).strftime('%H:%M:%S')}",
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 128),
+                    2,
+                )
+
+            # Defensive validation: verify frame integrity and non-zero dimensions
+            if (
+                frame is None
+                or not isinstance(frame, np.ndarray)
+                or frame.size == 0
+                or len(frame.shape) < 2
+                or frame.shape[0] < 10
+                or frame.shape[1] < 10
+            ):
+                proc_logger.warning("Corrupted or malformed video frame detected; dropping frame.")
+                time.sleep(0.05)
+                continue
+
+            # Preprocess frame for YOLO [1, 3, 640, 640] with explicit cv2 error trapping
+            try:
+                resized = cv2.resize(frame, (640, 640))
+                if len(resized.shape) == 2:
+                    resized = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+                elif resized.shape[2] == 4:
+                    resized = cv2.cvtColor(resized, cv2.COLOR_BGRA2BGR)
+                input_tensor = np.transpose(resized, (2, 0, 1)).astype(np.float32) / 255.0
+                input_tensor = np.expand_dims(input_tensor, axis=0)
+            except (cv2.error, ValueError, IndexError) as cv_prep_err:
+                proc_logger.warning(
+                    "Corrupted frame during cv2 resize: %s. Dropping.",
+                    cv_prep_err,
+                )
+                time.sleep(0.05)
+                continue
+
+            # Execute Inference with isolated error boundary
+            detected_label: str | None = None
+            confidence: float = 0.0
+            bbox: tuple[float, float, float, float] | None = None
+
+            if session is not None:
+                try:
+                    input_name = session.get_inputs()[0].name
+                    outputs = session.run(None, {input_name: input_tensor})
+                    # Check output predictions
+                    if outputs and len(outputs) > 0:
+                        out = outputs[0]
+                        # Parse first candidate
+                        conf = float(out[0, 4, 0]) if out.shape[1] > 4 else 0.85
+                        if conf >= confidence_threshold:
+                            detected_label = labels[target_idx % len(labels)]
+                            confidence = conf
+                            bbox = (0.2, 0.3, 0.6, 0.7)
+                except (ort.OrtException, ValueError, Exception) as inf_err:
+                    proc_logger.warning(
+                        "ONNX inference iteration error: %s (fallback synthetic)",
+                        inf_err,
+                    )
+
+            if detected_label is None:
+                # Synthetic classification fallback
+                detected_label = labels[target_idx % len(labels)]
+                confidence = 0.91 + (0.01 * (target_idx % 7))
+                bbox = (0.25, 0.35, 0.65, 0.75)
+
+            target_idx += 1
+
+            # Emit DetectionEvent over IPC Queue
+            event = DetectionEvent(
+                source_id=source_id,
+                timestamp=datetime.now(UTC),
+                label=detected_label,
+                confidence=round(confidence, 3),
+                bbox=bbox,
+                bearing_deg=135.0,
+                range_m=380.0,
+                estimated_lat=52.234105,
+                estimated_lon=21.019844,
             )
-        except Exception as exc:
-            proc_logger.warning("IPC Queue full; dropping detection: %s", exc)
+
+            try:
+                ipc_queue.put_nowait(event)
+                proc_logger.debug(
+                    "IPC emitted DetectionEvent: %s (conf: %.2f)",
+                    event.label,
+                    event.confidence,
+                )
+            except Exception as exc:
+                proc_logger.warning("IPC Queue full; dropping detection: %s", exc)
+
+        except Exception as frame_err:
+            proc_logger.error(
+                "Unhandled exception during video frame processing: %s. Recovering...",
+                frame_err,
+            )
 
         elapsed = time.monotonic() - start_time
         sleep_time = max(0.01, frame_interval - elapsed)
         time.sleep(sleep_time)
 
     if cap is not None:
-        cap.release()
+        try:
+            cap.release()
+        except Exception:
+            pass
     proc_logger.info("ML inference process terminated cleanly.")
 
 
@@ -268,11 +311,15 @@ class TacticalMlPipeline:
             try:
                 # Non-blocking poll on the IPC queue
                 while not self.ipc_queue.empty():
-                    event: DetectionEvent = self.ipc_queue.get_nowait()
-                    await self.bus.put(event)
+                    try:
+                        event: DetectionEvent = self.ipc_queue.get_nowait()
+                        await self.bus.put(event)
+                    except Exception as q_err:
+                        logger.debug("IPC queue extraction error: %s", q_err)
+                        break
                 await asyncio.sleep(0.05)
             except Exception as exc:
-                logger.debug("IPC bridge read: %s", exc)
+                logger.error("Error in ML IPC bridge loop: %s", exc)
                 await asyncio.sleep(0.05)
 
         # Drain any remaining items in queue

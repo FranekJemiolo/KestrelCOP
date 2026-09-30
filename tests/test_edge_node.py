@@ -358,3 +358,65 @@ async def test_tactical_ml_pipeline_lifecycle() -> None:
 async def test_run_edge_node_full_pipeline_brief_execution() -> None:
     """Verify full edge node pipeline starts all workers and shuts down cleanly."""
     await run_edge_node(mock_mode=True, duration_seconds=1.2)
+
+
+def test_publisher_exponential_backoff() -> None:
+    """Verify MQTT publisher calculates exponential backoff and resets on connect."""
+    pub = MqttTacticalPublisher(
+        reconnect_interval_seconds=1.0,
+        max_reconnect_interval_seconds=8.0,
+        backoff_factor=2.0,
+        jitter_ratio=0.05,
+    )
+    assert pub.current_backoff == 1.0
+
+    # Step 1: ~1.0s (within 0.95 to 1.05), advances to 2.0
+    d1 = pub.calculate_backoff()
+    assert 0.9 <= d1 <= 1.1
+    assert pub.current_backoff == 2.0
+
+    # Step 2: ~2.0s, advances to 4.0
+    d2 = pub.calculate_backoff()
+    assert 1.8 <= d2 <= 2.2
+    assert pub.current_backoff == 4.0
+
+    # Step 3: ~4.0s, advances to 8.0
+    d3 = pub.calculate_backoff()
+    assert 3.6 <= d3 <= 4.4
+    assert pub.current_backoff == 8.0
+
+    # Step 4: capped at max_backoff (8.0)
+    d4 = pub.calculate_backoff()
+    assert 7.2 <= d4 <= 8.0
+    assert pub.current_backoff == 8.0
+
+    # Reset backoff
+    pub.reset_backoff()
+    assert pub.current_backoff == 1.0
+
+
+def test_ml_worker_corrupted_frame_resilience() -> None:
+    """Verify ML worker process handles corrupted video frame source without crashing."""
+    import multiprocessing as mp
+    import time
+
+    from edge_node.ml_worker import run_ml_inference_process
+
+    ipc_queue: mp.Queue[DetectionEvent] = mp.Queue()
+    stop_event = mp.Event()
+
+    p = mp.Process(
+        target=run_ml_inference_process,
+        kwargs={
+            "ipc_queue": ipc_queue,
+            "stop_event": stop_event,
+            "video_source": "/dev/null/nonexistent_corrupted_stream.mp4",
+            "fps_limit": 10.0,
+        },
+    )
+    p.start()
+    time.sleep(0.5)
+    stop_event.set()
+    p.join(timeout=3.0)
+    assert not p.is_alive()
+    assert p.exitcode == 0

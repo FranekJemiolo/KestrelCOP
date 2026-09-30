@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # KestrelCOP Go Collector Backend Dockerfile
-# Multi-stage minimal scratch/alpine build
+# Multi-stage security-hardened distroless build (Zero-shell, minimal attack surface)
 # -----------------------------------------------------------------------------
 
 FROM golang:1.24-alpine AS builder
@@ -9,27 +9,28 @@ RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
 
+# Cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Copy source
 COPY . .
 
-# Compile static binary without CGO
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o /collector ./cmd/collector
+# Compile static, stripped binary without CGO for portability
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-w -s" -o /collector ./cmd/collector
 
 # -----------------------------------------------------------------------------
-# Minimal Production Runtime
+# Production Runtime Stage: Distroless Static Non-Root
 # -----------------------------------------------------------------------------
-FROM alpine:3.20
-
-RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -g 10001 kestrel && \
-    adduser -u 10001 -G kestrel -D kestrel
+FROM gcr.io/distroless/static-debian12:nonroot
 
 WORKDIR /app
+
+# Copy binary from builder
 COPY --from=builder /collector /app/collector
 
-USER kestrel
+# Switch to unprivileged distroless user
+USER nonroot:nonroot
 
 EXPOSE 8080 9090
 

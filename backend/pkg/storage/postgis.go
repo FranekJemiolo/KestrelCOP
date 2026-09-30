@@ -123,8 +123,18 @@ func (r *Repository) GetActiveEntities() []*models.CoTEvent {
 
 // Close closes the underlying database pool.
 func (r *Repository) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.db != nil {
-		return r.db.Close()
+		log.Println("[STORAGE] Closing PostgreSQL/PostGIS connection pool...")
+		err := r.db.Close()
+		r.connected = false
+		if err != nil {
+			return fmt.Errorf("error closing PostGIS connection pool: %w", err)
+		}
+		log.Println("[STORAGE] PostGIS connection pool closed cleanly.")
+		return nil
 	}
 	return nil
 }

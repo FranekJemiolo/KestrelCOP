@@ -9,6 +9,7 @@ obsolete tracks never saturate restored tactical bandwidth.
 import asyncio
 import json
 import logging
+import random
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,7 +37,7 @@ class BufferedCoTPayload:
 
 
 class MqttTacticalPublisher:
-    """Asynchronous MQTT publisher with bounded offline buffer and stale track pruning."""
+    """Asynchronous MQTT publisher with exponential backoff and offline buffering."""
 
     def __init__(
         self,
@@ -44,12 +45,21 @@ class MqttTacticalPublisher:
         broker_port: int = 1883,
         topic_prefix: str = "tactical/kestrel",
         buffer_max_size: int = 1000,
-        reconnect_interval_seconds: float = 3.0,
+        reconnect_interval_seconds: float = 1.0,
+        max_reconnect_interval_seconds: float = 30.0,
+        backoff_factor: float = 2.0,
+        jitter_ratio: float = 0.1,
     ) -> None:
         self.broker_host = broker_host
         self.broker_port = broker_port
         self.topic_prefix = topic_prefix
-        self.reconnect_interval = reconnect_interval_seconds
+
+        # Exponential backoff parameters
+        self.initial_backoff = reconnect_interval_seconds
+        self.max_backoff = max_reconnect_interval_seconds
+        self.backoff_factor = backoff_factor
+        self.jitter_ratio = jitter_ratio
+        self.current_backoff = self.initial_backoff
 
         # Bounded ring buffer for DIL environments
         self.offline_buffer: deque[BufferedCoTPayload] = deque(maxlen=buffer_max_size)
@@ -60,6 +70,28 @@ class MqttTacticalPublisher:
         self.stale_dropped_count: int = 0
         self.reconnect_count: int = 0
         self.is_connected: bool = False
+
+    @property
+    def reconnect_interval(self) -> float:
+        """Current backoff interval in seconds."""
+        return self.current_backoff
+
+    @reconnect_interval.setter
+    def reconnect_interval(self, value: float) -> None:
+        self.initial_backoff = value
+        self.current_backoff = value
+
+    def calculate_backoff(self) -> float:
+        """Compute the next exponential backoff delay with random jitter."""
+        jitter = 1.0 + random.uniform(-self.jitter_ratio, self.jitter_ratio)
+        delay = min(self.max_backoff, self.current_backoff * jitter)
+        # Advance exponential backoff for subsequent failures
+        self.current_backoff = min(self.max_backoff, self.current_backoff * self.backoff_factor)
+        return max(0.1, delay)
+
+    def reset_backoff(self) -> None:
+        """Reset exponential backoff delay back to initial value upon successful connection."""
+        self.current_backoff = self.initial_backoff
 
     def package_event(
         self,
@@ -182,10 +214,12 @@ class MqttTacticalPublisher:
                     port=self.broker_port,
                 ) as client:
                     self.is_connected = True
+                    self.reset_backoff()
                     logger.info(
-                        "Connected to tactical MQTT broker at %s:%d",
+                        "Connected to tactical MQTT broker at %s:%d (backoff reset to %.1fs)",
                         self.broker_host,
                         self.broker_port,
+                        self.initial_backoff,
                     )
 
                     # Flush any offline buffered packets first
@@ -216,9 +250,12 @@ class MqttTacticalPublisher:
 
             except (aiomqtt.MqttError, OSError, TimeoutError) as net_err:
                 self.is_connected = False
+                backoff_delay = self.calculate_backoff()
                 logger.warning(
-                    "Tactical link disconnected (%s). Diverting to offline ring buffer...",
+                    "Link down (%s). Backing off %.2fs (next base: %.2fs). Buffering offline...",
                     net_err,
+                    backoff_delay,
+                    self.current_backoff,
                 )
 
                 # Drain available items from bus into offline buffer
@@ -235,10 +272,16 @@ class MqttTacticalPublisher:
                     except asyncio.QueueEmpty:
                         break
 
-                await asyncio.sleep(self.reconnect_interval)
+                await asyncio.sleep(backoff_delay)
 
             except Exception as unk_err:
-                logger.error("Unexpected error in MQTT publisher loop: %s", unk_err)
-                await asyncio.sleep(self.reconnect_interval)
+                self.is_connected = False
+                backoff_delay = self.calculate_backoff()
+                logger.error(
+                    "Unexpected error in MQTT publisher loop: %s. Backing off for %.2fs...",
+                    unk_err,
+                    backoff_delay,
+                )
+                await asyncio.sleep(backoff_delay)
 
         logger.info("Tactical MQTT Publisher halted cleanly.")
